@@ -155,6 +155,16 @@ def parse_status(homework):
     )
 
 
+def find_unaccounted_error(name, message, **param):
+    """Catch an unaccounted error."""
+    try:
+        name
+    except Exception as error:
+        logging.error(message.format(
+            error=error, **param
+        ))
+
+
 def main():
     """The basic logic of the bot's operation."""
     check_tokens()
@@ -165,29 +175,26 @@ def main():
     while True:
         try:
             response = get_api_answer(timestamp)
-            try:
-                check_response(response)
-            except Exception as error:
-                logging.error(MAIN_CHECK_RESPONSE_ERROR.format(
-                    error=error, response=response
-                ))
+            find_unaccounted_error(
+                check_response(response), MAIN_CHECK_RESPONSE_ERROR,
+                response=response
+            )
             homeworks = response['homeworks']
             if homeworks:
                 homework = homeworks[0]
-                try:
-                    message = parse_status(homework)
-                except Exception as error:
-                    logging.error(MAIN_PARSE_STATUS_ERROR.format(
-                        error=error, homework=homework
-                    ))
+                find_unaccounted_error(
+                    parse_status(homework),
+                    MAIN_PARSE_STATUS_ERROR,
+                    homework=homework
+                )
+                message = parse_status(homework)
             else:
                 message = old_message
             if message != old_message:
-                try:
-                    send_message(bot, message)
-                    timestamp = response['current_date']
-                except Exception as error:
-                    logging.error(MAIN_MESSAGE_ERROR.format(error=error))
+                find_unaccounted_error(
+                    send_message(bot, message), MAIN_MESSAGE_ERROR
+                )
+                timestamp = response['current_date']
                 old_message = message
         except Exception as error:
             logging.error(MAIN_API_ERROR.format(
