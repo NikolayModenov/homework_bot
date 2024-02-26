@@ -1,7 +1,6 @@
 import logging
 import os
 import time
-from datetime import datetime
 from http import HTTPStatus
 
 import requests
@@ -9,9 +8,6 @@ import telegram
 from dotenv import load_dotenv
 
 load_dotenv()
-
-file_log = logging.FileHandler(f'{__name__}.log')
-console_out = logging.StreamHandler()
 
 
 PRACTICUM_TOKEN = os.getenv('PRACTICUM_TOKEN')
@@ -28,31 +24,25 @@ HOMEWORK_VERDICTS = {
     'reviewing': 'Работа взята на проверку ревьюером.',
     'rejected': 'Работа проверена: у ревьюера есть замечания.'
 }
-
-PRACTICUM_TOKEN_ERROR_MESSAGE = 'Токен прктикума отсутствует'
-TELEGRAM_TOKEN_ERROR_MESSAGE = 'Токен телеграмма отсутствует'
-TELEGRAM_CHAT_ID_ERROR_MESSAGE = 'ID чата телеграмма отсутствует'
 CHECK_TOKENS_CRITICAL_MESSAGE = (
-    '!! ОТСУТСТВУЕТ ОБЯЗАТЕЛЬНАЯ ПЕРЕМЕННАЯ !! Ошибка: {error}'
+    '!! ОТСУТСТВУЕТ ОБЯЗАТЕЛЬНАЯ ПЕРЕМЕННАЯ {name} !!'
 )
 SEND_MESSAGE_FOR_LOG = 'сообщение отправлено: {message}'
 GET_API_REQUEST_EXCEPTION = (
-    'При получении ответа API с параметрами url={ENDPOINT}, '
-    'headers={HEADERS}, params={timestamp} '
-    'возникла ошибка RequestException.'
+    'При получении ответа API с параметрами endpoint = {endpoint}, '
+    'headers = {headers}, params = {timestamp}. '
+    'Возникла ошибка: {exception}.'
 )
 GET_API_STATUS_CODE_EXCEPTIONS = (
     'Некорректный Status code ответа API. '
+    'с параметрами: enpoint = {endpoint}, '
+    'headers = {headers}, timestamp = {timestamp}. '
     'Ожидается status_code = 200. '
     'Полученный status_code: {status_code}'
 )
 GET_API_ERROR_IN_JSON = (
-    'Вернулся некорректный ответ API, содержащий ключ "error", '
+    'Вернулся некорректный ответ API, содержащий ключ {name_error}, '
     'со значением: {error_value}.'
-)
-GET_API_CODE_IN_JSON = (
-    'Вернулся некорректный ответ API, содержащий ключ "code", '
-    'со значением: {code_value}.'
 )
 CHECK_RESPONSE_ISITANSE_DICTIONARY = (
     'Не корректный формат данных в ответе API, '
@@ -74,21 +64,28 @@ PARSE_STATUS_RESULT = (
 MAIN_MESSAGE_ERROR = (
     'Бот не смог отправить сообщение. Возникла ошибка: {error}'
 )
+MAIN_API_ERROR = (
+    'Не получилось сформировать ответ API c Unix time = {timestamp}. '
+    'Полученная ошибка: {error}'
+)
 
 
 def check_tokens():
     """Check that the required variables have been received."""
     variables = (
-        (PRACTICUM_TOKEN, PRACTICUM_TOKEN_ERROR_MESSAGE),
-        (TELEGRAM_TOKEN, TELEGRAM_TOKEN_ERROR_MESSAGE),
-        (TELEGRAM_CHAT_ID, TELEGRAM_CHAT_ID_ERROR_MESSAGE)
+        (PRACTICUM_TOKEN, 'practicum_token'),
+        (TELEGRAM_TOKEN, 'telegram_token'),
+        (TELEGRAM_CHAT_ID, 'telegram_chat_id')
     )
-    for variable, error_message in variables:
-        try:
-            assert variable, error_message
-        except Exception as error:
-            logging.critical(CHECK_TOKENS_CRITICAL_MESSAGE.format(error=error))
-            raise ValueError
+    empty_variables = list()
+    for variable, name in variables:
+        if not variable:
+            empty_variables.append(name)
+    if empty_variables:
+        logging.critical(
+            CHECK_TOKENS_CRITICAL_MESSAGE.format(name=empty_variables)
+        )
+        raise ValueError
 
 
 def send_message(bot, message):
@@ -97,29 +94,31 @@ def send_message(bot, message):
     logging.debug(SEND_MESSAGE_FOR_LOG.format(message=message))
 
 
-def get_api_answer(timestamp):
+def get_api_answer(date):
     """Get an API response."""
     try:
         homework_statuses = requests.get(
-            ENDPOINT, headers=HEADERS, params=timestamp
+            ENDPOINT, headers=HEADERS, params={'from_date': date}
         )
     except requests.RequestException:
-        raise GET_API_REQUEST_EXCEPTION.format(
-            ENDPOINT=ENDPOINT, HEADERS=HEADERS, timestamp=timestamp
-        )
+        raise BlockingIOError(GET_API_REQUEST_EXCEPTION.format(
+            endpoint=ENDPOINT, headers=HEADERS, timestamp=date,
+            exception=requests.RequestException
+        ))
     if homework_statuses.status_code != HTTPStatus.OK:
         raise ValueError(GET_API_STATUS_CODE_EXCEPTIONS.format(
+            enpoint=ENDPOINT, headers=HEADERS, timestamp=date,
             status_code=homework_statuses.status_code
         ))
-    if 'error' in homework_statuses.json():
-        raise ValueError(GET_API_ERROR_IN_JSON.format(
-            error_value=homework_statuses.json()['error']
-        ))
-    if 'code' in homework_statuses.json():
-        raise ValueError(GET_API_CODE_IN_JSON.format(
-            code_value=homework_statuses.json()['code']
-        ))
-    return homework_statuses.json()
+    api_response = homework_statuses.json()
+    error_keys = ('error', 'code')
+    for error_key in error_keys:
+        if error_key in api_response:
+            raise ValueError(GET_API_ERROR_IN_JSON.format(
+                name_error=error_key,
+                error_value=api_response[error_key]
+            ))
+    return api_response
 
 
 def check_response(response):
@@ -130,9 +129,10 @@ def check_response(response):
         ))
     if 'homeworks' not in response:
         raise KeyError(HOMEWORKS_KEY_ERROR)
-    if not isinstance(response['homeworks'], list):
+    homeworks = response['homeworks']
+    if not isinstance(homeworks, list):
         raise TypeError(CHECK_RESPONSE_LISTS_ISITANSE.format(
-            incorrect_type=type(response['homeworks'])
+            incorrect_type=type(homeworks)
         ))
 
 
@@ -140,11 +140,12 @@ def parse_status(homework):
     """Collect a message to send in a telegram."""
     if 'homework_name' not in homework:
         raise KeyError(HOMEWORK_NAME_KEY_ERROR)
-    if homework['status'] not in HOMEWORK_VERDICTS:
-        raise ValueError(STATUS_VALUE_ERROR.format(status=homework['status']))
+    homework_status = homework['status']
+    if homework_status not in HOMEWORK_VERDICTS:
+        raise ValueError(STATUS_VALUE_ERROR.format(status=homework_status))
     return PARSE_STATUS_RESULT.format(
         homework_name=homework['homework_name'],
-        verdict=HOMEWORK_VERDICTS[homework['status']]
+        verdict=HOMEWORK_VERDICTS[homework_status]
     )
 
 
@@ -154,32 +155,40 @@ def main():
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
     timestamp = 0
     old_message = ''
+    old_response = ''
 
     while True:
-        response = get_api_answer({'from_date': timestamp})
+        try:
+            response = get_api_answer(timestamp)
+        except Exception as error:
+            logging.error(MAIN_API_ERROR.format(
+                timestamp=timestamp, error=error
+            ))
+            response = old_response
         check_response(response)
-        if response['homeworks']:
-            message = parse_status(response['homeworks'][0])
+        homeworks = response['homeworks']
+        if homeworks:
+            message = parse_status(homeworks[0])
         else:
             message = old_message
         if message != old_message:
             try:
                 send_message(bot, message)
-                timestamp = int(time.mktime(datetime.fromisoformat(
-                    response['homeworks'][0]['date_updated']
-                    .replace("Z", "+00:00")
-                ).timetuple()))
+                timestamp = response['current_date']
             except Exception as error:
                 logging.error(MAIN_MESSAGE_ERROR.format(error=error))
             old_message = message
+            old_response = response
         time.sleep(RETRY_PERIOD)
 
 
 if __name__ == '__main__':
     logging.basicConfig(
         level=logging.DEBUG,
-        handlers=(file_log, console_out),
-        format='%(asctime)s, %(levelname)s, %(message)s, %(name)s'
+        handlers=(
+            logging.FileHandler(f'{__name__}.log'), logging.StreamHandler()
+        ),
+        format='%(asctime)s, %(levelname)s, %(message)s'
     )
 
     main()
