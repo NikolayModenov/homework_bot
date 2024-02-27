@@ -14,6 +14,8 @@ PRACTICUM_TOKEN = os.getenv('PRACTICUM_TOKEN')
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 
+VARIABLES = ('PRACTICUM_TOKEN', 'TELEGRAM_TOKEN', 'TELEGRAM_CHAT_ID')
+
 RETRY_PERIOD = 600
 ENDPOINT = 'https://practicum.yandex.ru/api/user_api/homework_statuses/'
 HEADERS = {'Authorization': f'OAuth {PRACTICUM_TOKEN}'}
@@ -25,25 +27,25 @@ HOMEWORK_VERDICTS = {
     'rejected': 'Работа проверена: у ревьюера есть замечания.'
 }
 CHECK_TOKENS_CRITICAL_MESSAGE = (
-    '!! ОТСУТСТВУЕТ ОБЯЗАТЕЛЬНАЯ ПЕРЕМЕННАЯ {names} !!'
+    '!! Отсутствуют обязательные переменные {names} !!'
 )
 SEND_MESSAGE_FOR_LOG = 'сообщение отправлено: {message}'
 GET_API_REQUEST_EXCEPTION = (
-    'При получении ответа API с параметрами endpoint = {endpoint}, '
-    'headers = {headers}, params = {timestamp}. '
+    'При получении ответа API с параметрами endpoint = {url}, '
+    'headers = {headers}, params = {params}. '
     'Возникла ошибка: {exception}.'
 )
 GET_API_STATUS_CODE_EXCEPTIONS = (
     'Некорректный Status code ответа API. '
-    'С параметрами: enpoint = {endpoint}, '
-    'headers = {headers}, timestamp = {timestamp}. '
+    'С параметрами: enpoint = {url}, '
+    'headers = {headers}, params = {params}. '
     'Ожидается status_code = 200. '
     'Полученный status_code: {status_code}'
 )
 GET_API_ERROR_IN_JSON = (
     'Вернулся некорректный ответ API, содержащий ключ {name_error}, '
     'со значением: {error_value}. Параметры ответа API: '
-    'enpoint = {endpoint}, headers = {headers}, timestamp = {timestamp}. '
+    'enpoint = {url}, headers = {headers}, timestamp = {params}. '
 )
 CHECK_RESPONSE_ISITANSE_DICTIONARY = (
     'Не корректный формат данных в ответе API, '
@@ -67,23 +69,13 @@ MAIN_MESSAGE_ERROR = (
 )
 MAIN_API_ERROR = (
     'Не получилось сформировать ответ API. '
-    'Полученная ошибка: {error}. Параметры ответа API: '
-    'enpoint = {endpoint}, headers = {headers}, timestamp = {timestamp}. '
-)
-MAIN_CHECK_RESPONSE_ERROR = (
-    'Не получилось провести проверку отвера API со значением {response}. '
     'Полученная ошибка: {error}.'
-)
-MAIN_PARSE_STATUS_ERROR = (
-    'Не получилось собрать сообщение для отправки в телеграмм.'
-    'Исходный словарь: {homework}. Полученная ошибка: {error}.'
 )
 
 
 def check_tokens():
     """Check that the required variables have been received."""
-    variables = ('PRACTICUM_TOKEN', 'TELEGRAM_TOKEN', 'TELEGRAM_CHAT_ID')
-    empty_variables = [name for name in variables if not globals()[name]]
+    empty_variables = [name for name in VARIABLES if not globals()[name]]
     if empty_variables:
         logging.critical(
             CHECK_TOKENS_CRITICAL_MESSAGE.format(names=empty_variables)
@@ -102,12 +94,10 @@ def send_message(bot, message):
 def get_api_answer(timestamp):
     """Get an API response."""
     response_api_parameters = dict(
-        endpoint=ENDPOINT, headers=HEADERS, timestamp=timestamp
+        url=ENDPOINT, headers=HEADERS, params={'from_date': timestamp}
     )
     try:
-        homework_statuses = requests.get(
-            ENDPOINT, headers=HEADERS, params={'from_date': timestamp}
-        )
+        homework_statuses = requests.get(response_api_parameters)
     except requests.RequestException as error:
         raise ConnectionError(GET_API_REQUEST_EXCEPTION.format(
             exception=error, **response_api_parameters
@@ -155,14 +145,14 @@ def parse_status(homework):
     )
 
 
-def find_unaccounted_error(name, message, **param):
-    """Catch an unaccounted error."""
-    try:
-        name
-    except Exception as error:
-        logging.error(message.format(
-            error=error, **param
-        ))
+# def find_unaccounted_error(name, message, **param):
+#     """Catch an unaccounted error."""
+#     try:
+#         name
+#     except Exception as error:
+#         logging.error(message.format(
+#             error=error, **param
+#         ))
 
 
 def main():
@@ -175,32 +165,25 @@ def main():
     while True:
         try:
             response = get_api_answer(timestamp)
-            find_unaccounted_error(
-                check_response(response), MAIN_CHECK_RESPONSE_ERROR,
-                response=response
-            )
+            check_response(response)
             homeworks = response['homeworks']
             if homeworks:
-                homework = homeworks[0]
-                find_unaccounted_error(
-                    parse_status(homework),
-                    MAIN_PARSE_STATUS_ERROR,
-                    homework=homework
-                )
-                message = parse_status(homework)
+                message = parse_status(homeworks[0])
             else:
                 message = old_message
             if message != old_message:
-                find_unaccounted_error(
-                    send_message(bot, message), MAIN_MESSAGE_ERROR
-                )
-                timestamp = response['current_date']
+                send_message(bot, message)
+                timestamp = response.get('current_date', timestamp)
                 old_message = message
         except Exception as error:
-            logging.error(MAIN_API_ERROR.format(
-                error=error, endpoint=ENDPOINT, headers=HEADERS,
-                timestamp=timestamp
-            ))
+            error_message = MAIN_API_ERROR.format(error=error)
+            if error_message != old_message:
+                try:
+                    send_message(bot, error_message)
+                except Exception as error:
+                    logging.error(MAIN_MESSAGE_ERROR.format(error=error))
+                old_message = error_message
+            logging.error(error_message)
         time.sleep(RETRY_PERIOD)
 
 
