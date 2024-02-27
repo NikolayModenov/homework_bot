@@ -97,7 +97,7 @@ def get_api_answer(timestamp):
         url=ENDPOINT, headers=HEADERS, params={'from_date': timestamp}
     )
     try:
-        homework_statuses = requests.get(response_api_parameters)
+        homework_statuses = requests.get(**response_api_parameters)
     except requests.RequestException as error:
         raise ConnectionError(GET_API_REQUEST_EXCEPTION.format(
             exception=error, **response_api_parameters
@@ -145,16 +145,6 @@ def parse_status(homework):
     )
 
 
-# def find_unaccounted_error(name, message, **param):
-#     """Catch an unaccounted error."""
-#     try:
-#         name
-#     except Exception as error:
-#         logging.error(message.format(
-#             error=error, **param
-#         ))
-
-
 def main():
     """The basic logic of the bot's operation."""
     check_tokens()
@@ -177,13 +167,13 @@ def main():
                 old_message = message
         except Exception as error:
             error_message = MAIN_API_ERROR.format(error=error)
+            logging.error(error_message)
             if error_message != old_message:
                 try:
                     send_message(bot, error_message)
+                    old_message = error_message
                 except Exception as error:
                     logging.error(MAIN_MESSAGE_ERROR.format(error=error))
-                old_message = error_message
-            logging.error(error_message)
         time.sleep(RETRY_PERIOD)
 
 
